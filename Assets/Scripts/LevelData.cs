@@ -1,4 +1,4 @@
-using System.Collections;
+п»їusing System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using System;
@@ -9,11 +9,11 @@ public class LevelData : ScriptableObject
     public string levelName = "New Level";
     public List<TileData> tiles = new List<TileData>();
 
-    // Убираем фиксированный gridSize и вычисляем автоматически
+    // РЈР±РёСЂР°РµРј С„РёРєСЃРёСЂРѕРІР°РЅРЅС‹Р№ gridSize Рё РІС‹С‡РёСЃР»СЏРµРј Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё
     public Vector2Int CalculateGridSize()
     {
         if (tiles == null || tiles.Count == 0)
-            return new Vector2Int(20, 10); // Размер по умолчанию для пустого уровня
+            return new Vector2Int(20, 10); // Р Р°Р·РјРµСЂ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ РґР»СЏ РїСѓСЃС‚РѕРіРѕ СѓСЂРѕРІРЅСЏ
 
         int minX = int.MaxValue, maxX = int.MinValue;
         int minY = int.MaxValue, maxY = int.MinValue;
@@ -26,7 +26,7 @@ public class LevelData : ScriptableObject
             maxY = Mathf.Max(maxY, tile.position.y);
         }
 
-        // Добавляем отступы по краям
+        // Р”РѕР±Р°РІР»СЏРµРј РѕС‚СЃС‚СѓРїС‹ РїРѕ РєСЂР°СЏРј
         int width = maxX - minX + 5;
         int height = maxY - minY + 5;
 

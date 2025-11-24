@@ -1,4 +1,4 @@
-using UnityEditor;
+﻿using UnityEditor;
 using UnityEngine;
 using System.Collections.Generic;
 
@@ -9,6 +9,10 @@ public class MapEditorWindow : EditorWindow
     private Vector2 scrollPosition;
     private bool isPaintingMode = true;
     private bool isEraseMode = false;
+
+    private Stack<EditorAction> undoStack = new Stack<EditorAction>();
+    private Stack<EditorAction> redoStack = new Stack<EditorAction>();
+    private const int MAX_UNDO_HISTORY = 50;
 
     [MenuItem("Tools/2D Map Editor")]
     public static void ShowWindow()
@@ -28,10 +32,68 @@ public class MapEditorWindow : EditorWindow
 
     private void OnGUI()
     {
+        HandleHotkeys();
         DrawLevelHeader();
         DrawTilePalette();
         DrawTools();
         DrawCurrentLevelInfo();
+        DrawUndoRedoInfo();
+    }
+
+    private void HandleHotkeys()
+    {
+        Event e = Event.current;
+
+        if (e.type == EventType.KeyDown)
+        {
+            // Переключение режимов P/E
+            if (e.keyCode == KeyCode.P)
+            {
+                isPaintingMode = true;
+                isEraseMode = false;
+                e.Use();
+                Repaint();
+            }
+            else if (e.keyCode == KeyCode.E)
+            {
+                isPaintingMode = false;
+                isEraseMode = true;
+                selectedTileId = null;
+                e.Use();
+                Repaint();
+            }
+            // Отмена действия Ctrl+Z
+            else if (e.keyCode == KeyCode.Z && e.control)
+            {
+                UndoLastAction();
+                e.Use();
+            }
+            // Повтор действия Ctrl+Y
+            else if (e.keyCode == KeyCode.Y && e.control)
+            {
+                RedoLastAction();
+                e.Use();
+            }
+        }
+    }
+
+    private void DrawUndoRedoInfo()
+    {
+        GUILayout.Space(10);
+        GUILayout.Label("History", EditorStyles.boldLabel);
+        GUILayout.Label($"Undo: {undoStack.Count} actions");
+        GUILayout.Label($"Redo: {redoStack.Count} actions");
+
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("Undo") && undoStack.Count > 0)
+        {
+            UndoLastAction();
+        }
+        if (GUILayout.Button("Redo") && redoStack.Count > 0)
+        {
+            RedoLastAction();
+        }
+        GUILayout.EndHorizontal();
     }
 
     private void DrawLevelHeader()
@@ -130,14 +192,14 @@ public class MapEditorWindow : EditorWindow
         AssetDatabase.SaveAssets();
         currentLevelData = newLevel;
 
-        Debug.Log("������ ����� �������: " + AssetDatabase.GetAssetPath(newLevel));
+        Debug.Log("Создан новый уровень: " + AssetDatabase.GetAssetPath(newLevel));
     }
 
     private void SaveLevel()
     {
         EditorUtility.SetDirty(currentLevelData);
         AssetDatabase.SaveAssets();
-        Debug.Log("������� ��������: " + currentLevelData.name);
+        Debug.Log("Уровень сохранен: " + currentLevelData.name);
     }
 
     private void OnSceneGUI(SceneView sceneView)
@@ -163,12 +225,12 @@ public class MapEditorWindow : EditorWindow
         {
             if (isPaintingMode && !string.IsNullOrEmpty(selectedTileId))
             {
-                PlaceTile(gridPosition, gridSize);
+                PlaceTileWithUndo(gridPosition, gridSize);
                 e.Use();
             }
             else if (isEraseMode)
             {
-                RemoveTile(gridPosition);
+                RemoveTileWithUndo(gridPosition);
                 e.Use();
             }
         }
@@ -177,14 +239,200 @@ public class MapEditorWindow : EditorWindow
         {
             if (isPaintingMode && !string.IsNullOrEmpty(selectedTileId))
             {
-                PlaceTile(gridPosition, gridSize);
+                PlaceTileWithUndo(gridPosition, gridSize);
                 e.Use();
             }
             else if (isEraseMode)
             {
-                RemoveTile(gridPosition);
+                RemoveTileWithUndo(gridPosition);
                 e.Use();
             }
+        }
+    }
+
+    private void PlaceTileWithUndo(Vector2Int position, Vector2Int gridSize)
+    {
+        if (position.x < 0 || position.x >= gridSize.x ||
+            position.y < 0 || position.y >= gridSize.y)
+        {
+            return;
+        }
+
+        TileData existingTile = currentLevelData.tiles.Find(t => t.position == position);
+        EditorAction action;
+
+        if (existingTile != null)
+        {
+            // Сохраняем состояние до изменения
+            action = new EditorAction
+            {
+                actionType = ActionType.ModifyTile,
+                position = position,
+                previousTileId = existingTile.tileId,
+                newTileId = selectedTileId
+            };
+            existingTile.tileId = selectedTileId;
+        }
+        else
+        {
+            // Создаем новый тайл
+            var newTile = new TileData
+            {
+                position = position,
+                tileId = selectedTileId,
+                layer = 0
+            };
+            currentLevelData.tiles.Add(newTile);
+
+            action = new EditorAction
+            {
+                actionType = ActionType.AddTile,
+                position = position,
+                previousTileId = null,
+                newTileId = selectedTileId
+            };
+        }
+
+        AddActionToUndoStack(action);
+        EditorUtility.SetDirty(currentLevelData);
+        Repaint();
+    }
+
+    private void RemoveTileWithUndo(Vector2Int position)
+    {
+        TileData tileToRemove = currentLevelData.tiles.Find(t => t.position == position);
+        if (tileToRemove != null)
+        {
+            // Сохраняем информацию об удаляемом тайле
+            EditorAction action = new EditorAction
+            {
+                actionType = ActionType.RemoveTile,
+                position = position,
+                previousTileId = tileToRemove.tileId,
+                newTileId = null
+            };
+
+            currentLevelData.tiles.Remove(tileToRemove);
+            AddActionToUndoStack(action);
+
+            EditorUtility.SetDirty(currentLevelData);
+            Repaint();
+        }
+    }
+
+    private void AddActionToUndoStack(EditorAction action)
+    {
+        undoStack.Push(action);
+
+        // Ограничиваем размер истории
+        if (undoStack.Count > MAX_UNDO_HISTORY)
+        {
+            // Удаляем самые старые действия
+            var tempStack = new Stack<EditorAction>();
+            while (undoStack.Count > MAX_UNDO_HISTORY - 1)
+            {
+                tempStack.Push(undoStack.Pop());
+            }
+            undoStack.Clear();
+            while (tempStack.Count > 0)
+            {
+                undoStack.Push(tempStack.Pop());
+            }
+        }
+
+        // Очищаем стек повтора при новом действии
+        redoStack.Clear();
+    }
+
+    private void UndoLastAction()
+    {
+        if (undoStack.Count == 0)
+        {
+            Debug.Log("Nothing to undo");
+            return;
+        }
+
+        EditorAction action = undoStack.Pop();
+        redoStack.Push(action);
+
+        ApplyUndoAction(action);
+        EditorUtility.SetDirty(currentLevelData);
+        Repaint();
+    }
+
+    private void RedoLastAction()
+    {
+        if (redoStack.Count == 0)
+        {
+            Debug.Log("Nothing to redo");
+            return;
+        }
+
+        EditorAction action = redoStack.Pop();
+        undoStack.Push(action);
+
+        ApplyRedoAction(action);
+        EditorUtility.SetDirty(currentLevelData);
+        Repaint();
+    }
+
+    private void ApplyUndoAction(EditorAction action)
+    {
+        switch (action.actionType)
+        {
+            case ActionType.AddTile:
+                // Отмена добавления - удаляем тайл
+                currentLevelData.tiles.RemoveAll(t => t.position == action.position);
+                break;
+
+            case ActionType.RemoveTile:
+                // Отмена удаления - восстанавливаем тайл
+                currentLevelData.tiles.Add(new TileData
+                {
+                    position = action.position,
+                    tileId = action.previousTileId,
+                    layer = 0
+                });
+                break;
+
+            case ActionType.ModifyTile:
+                // Отмена изменения - восстанавливаем предыдущее состояние
+                TileData tile = currentLevelData.tiles.Find(t => t.position == action.position);
+                if (tile != null)
+                {
+                    tile.tileId = action.previousTileId;
+                }
+                break;
+        }
+    }
+
+    private void ApplyRedoAction(EditorAction action)
+    {
+        switch (action.actionType)
+        {
+            case ActionType.AddTile:
+                // Повтор добавления - добавляем тайл
+                currentLevelData.tiles.Add(new TileData
+                {
+                    position = action.position,
+                    tileId = action.newTileId,
+                    layer = 0
+                });
+                break;
+
+            case ActionType.RemoveTile:
+                // Повтор удаления - удаляем тайл
+                currentLevelData.tiles.RemoveAll(t => t.position == action.position);
+                break;
+
+            case ActionType.ModifyTile:
+                // Повтор изменения - применяем новое состояние
+                TileData tile = currentLevelData.tiles.Find(t => t.position == action.position);
+                if (tile != null)
+                {
+                    tile.tileId = action.newTileId;
+                }
+                break;
         }
     }
 
@@ -273,4 +521,20 @@ public class MapEditorWindow : EditorWindow
             Repaint();
         }
     }
+}
+
+public enum ActionType
+{
+    AddTile,
+    RemoveTile,
+    ModifyTile
+}
+
+[System.Serializable]
+public class EditorAction
+{
+    public ActionType actionType;
+    public Vector2Int position;
+    public string previousTileId;
+    public string newTileId;
 }
